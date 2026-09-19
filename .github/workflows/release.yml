@@ -45,7 +45,8 @@ jobs:
           APP_VERSION_NAME="${APP_VERSION_NAME#v}" ./gradlew --no-daemon test :app:lintRelease :app:assembleRelease
           cp app/build/outputs/apk/release/app-release.apk "swap-calendar-${RELEASE_TAG}.apk"
       - name: Verify APK signature
-        run: "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "swap-calendar-${RELEASE_TAG}.apk"
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "swap-calendar-${RELEASE_TAG}.apk"
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
