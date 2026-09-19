@@ -38,7 +38,9 @@ data class CalendarUiState(
     val settingsOpen: Boolean = false,
     val updateInfo: UpdateInfo? = null,
 ) {
-    val symbols: List<String> get() = pairSettings.orderedSymbols(rows.map { it.symbol }.distinct())
+    val symbols: List<String> get() = pairSettings
+        .orderedSymbols(rows.map { it.symbol }.distinct())
+        .sortedByDescending { quantity(it) > 0 }
     val visibleRows: List<SwapPointRow> get() {
         val order = symbols.withIndex().associate { it.value to it.index }
         return rows.asSequence()
@@ -62,6 +64,16 @@ data class CalendarUiState(
             .divide(BigDecimal("10000"))
             .setScale(0, RoundingMode.FLOOR)
             .longValueExact()
+    }
+
+    fun hasHoldings(rows: List<SwapPointRow>): Boolean = rows.any { quantity(it.symbol) > 0 }
+
+    fun estimatedDailySwap(rows: List<SwapPointRow>): Long? {
+        val heldRows = rows.filter { quantity(it.symbol) > 0 }
+        if (heldRows.isEmpty()) return null
+        val estimates = heldRows.map { estimatedSwap(it) }
+        if (estimates.any { it == null }) return null
+        return estimates.filterNotNull().sum()
     }
 }
 

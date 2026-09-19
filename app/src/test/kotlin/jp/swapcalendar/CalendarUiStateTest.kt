@@ -46,6 +46,49 @@ class CalendarUiStateTest {
         assertEquals(listOf("EUR/JPY"), state.visibleRows.map { it.symbol })
     }
 
+    @Test
+    fun `places pairs with holdings before configured priority`() {
+        val eur = row.copy(pairId = "3", symbol = "EUR/JPY")
+        val state = CalendarUiState(
+            month = YearMonth.of(2026, 9),
+            rows = listOf(row, eur),
+            pairSettings = PairSettings(
+                order = listOf("USD/JPY", "EUR/JPY"),
+                quantities = mapOf("EUR/JPY" to 10_000L),
+            ),
+        )
+
+        assertEquals(listOf("EUR/JPY", "USD/JPY"), state.symbols)
+    }
+
+    @Test
+    fun `sums configured holdings for calendar day`() {
+        val eur = row.copy(pairId = "3", symbol = "EUR/JPY", buySwap = "100.5")
+        val state = CalendarUiState(
+            month = YearMonth.of(2026, 9),
+            rows = listOf(row, eur),
+            pairSettings = PairSettings(
+                quantities = mapOf("USD/JPY" to 20_000L, "EUR/JPY" to 10_000L),
+            ),
+        )
+
+        assertEquals(1_901L, state.estimatedDailySwap(state.rows))
+    }
+
+    @Test
+    fun `returns unpublished when any held pair has no swap value`() {
+        val unpublished = row.copy(pairId = "3", symbol = "EUR/JPY", buySwap = null)
+        val state = CalendarUiState(
+            month = YearMonth.of(2026, 9),
+            rows = listOf(row, unpublished),
+            pairSettings = PairSettings(
+                quantities = mapOf("USD/JPY" to 20_000L, "EUR/JPY" to 10_000L),
+            ),
+        )
+
+        assertEquals(null, state.estimatedDailySwap(state.rows))
+    }
+
     private fun state(side: PositionSide) = CalendarUiState(
         month = YearMonth.of(2026, 9),
         rows = listOf(row),

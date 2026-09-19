@@ -174,15 +174,29 @@ private fun CalendarGrid(state: CalendarUiState, selectDate: (LocalDate) -> Unit
                 ) {
                     if (date != null) Column(Modifier.padding(5.dp)) {
                         Text(date.dayOfMonth.toString(), fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
-                        val days = rows.map { it.spDays }.distinct()
-                        if (days.isNotEmpty()) {
-                            Text("SP ${days.sorted().joinToString("・")}日", style = MaterialTheme.typography.labelSmall)
+                        if (state.hasHoldings(rows)) {
+                            val amount = state.estimatedDailySwap(rows)
+                            Text(
+                                amount?.let(::formatCalendarYen) ?: "未発表",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (amount != null && amount < 0) MaterialTheme.colorScheme.error else Color.Unspecified,
+                            )
+                        } else {
+                            val days = rows.map { it.spDays }.distinct()
+                            if (days.isNotEmpty()) {
+                                Text("SP ${days.sorted().joinToString("・")}日", style = MaterialTheme.typography.labelSmall)
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+private fun formatCalendarYen(amount: Long): String = when {
+    amount > 0 -> "+${"%,d".format(amount)}円"
+    else -> "${"%,d".format(amount)}円"
 }
 
 @Composable
