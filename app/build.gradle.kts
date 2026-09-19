@@ -74,7 +74,12 @@ dependencies {
     implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.content)
     implementation(libs.ktor.serialization.json)
+    implementation(libs.jsoup)
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.platform.launcher)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
 
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }
+
+tasks.withType<Test>().configureEach { useJUnitPlatform() }

@@ -1,6 +1,6 @@
 # Swap Calendar
 
-GMO外貨の公開スワップカレンダーを、月別に保存して閲覧するAndroidアプリです。AndroidアプリはAPIから取得したデータをRoomへ保存し、オフライン時は保存済みデータを表示します。公式ページの取得はKtorサーバーだけが行います。
+GMO外貨の公開スワップカレンダーを、月別に保存して閲覧するAndroidアプリです。Androidアプリは取得したデータをRoomへ保存し、オフライン時は保存済みデータを表示します。本番API URLが設定されている場合はKtorサーバーを利用し、未設定の場合は公式ページをAndroid側で直接取得して、年月・列数・重複・値を検証してから保存します。
 
 ## 開発起動
 
@@ -33,7 +33,7 @@ Android Studioでdebugビルドを起動します。エミュレーターのdebu
 
 ## GitHub Release
 
-`v`で始まるタグをpushすると、GitHub ActionsがテストとLintを実行し、GitHub Secretsに保存した鍵でrelease APKを署名してGitHub Releaseへ添付します。本番API URLはリポジトリ変数 `API_BASE_URL` から注入します。
+`v`で始まるタグをpushすると、GitHub ActionsがテストとLintを実行し、GitHub Secretsに保存した鍵でrelease APKを署名してGitHub Releaseへ添付します。本番API URLはリポジトリ変数 `API_BASE_URL` から注入できます。変数が未設定でも、Android側の公式ページ取得によって動作します。
 
 必要なActions Secretsは `RELEASE_KEYSTORE_BASE64`、`RELEASE_STORE_PASSWORD`、`RELEASE_KEY_ALIAS`、`RELEASE_KEY_PASSWORD` です。署名鍵はリポジトリへコミットしません。
 

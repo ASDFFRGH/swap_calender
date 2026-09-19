@@ -8,8 +8,13 @@ import io.ktor.http.isSuccess
 import jp.swapcalendar.api.ErrorResponseDto
 import jp.swapcalendar.api.MonthResponseDto
 
-class SwapApi(private val client: HttpClient, private val baseUrl: String) {
+class SwapApi(
+    private val client: HttpClient,
+    private val baseUrl: String,
+    private val officialSource: OfficialSwapSource = OfficialSwapSource(client),
+) {
     suspend fun month(month: String): MonthResponseDto {
+        if (!hasBackend()) return officialSource.month(month)
         val response = client.get("$baseUrl/api/swap-points") { parameter("month", month) }
         if (!response.status.isSuccess()) {
             val error = runCatching { response.body<ErrorResponseDto>() }.getOrNull()
@@ -17,7 +22,9 @@ class SwapApi(private val client: HttpClient, private val baseUrl: String) {
         }
         return response.body()
     }
+
+    private fun hasBackend(): Boolean =
+        baseUrl.isNotBlank() && !baseUrl.contains("example.invalid")
 }
 
 class ApiException(val code: String, override val message: String) : Exception(message)
-
