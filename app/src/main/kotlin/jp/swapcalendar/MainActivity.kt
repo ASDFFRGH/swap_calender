@@ -127,11 +127,35 @@ fun SwapCalendarScreen(viewModel: CalendarViewModel = hiltViewModel()) {
                 }
             }
             CalendarGrid(state, viewModel::selectDate)
-            Text("SP日数が通貨ペアで異なる日は「1・3日」のようにすべて表示します。", style = MaterialTheme.typography.bodySmall)
+            MonthlySwapTotal(state)
             state.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (state.rows.isEmpty() && !state.refreshing) Text("この月の保存済みデータはありません。更新してください。")
             DayDetails(state)
             SourceInfo(state)
+        }
+    }
+}
+
+@Composable
+private fun MonthlySwapTotal(state: CalendarUiState) {
+    val heldRows = state.visibleRows.filter { state.quantity(it.symbol) > 0 }
+    Card(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("月間スワップ合計", fontWeight = FontWeight.Bold)
+            val total = state.estimatedMonthlySwap()
+            Text(
+                when {
+                    heldRows.isEmpty() -> "保有数量未設定"
+                    total == null -> "未発表"
+                    else -> formatCalendarYen(total)
+                },
+                fontWeight = FontWeight.Bold,
+                color = if (total != null && total < 0) MaterialTheme.colorScheme.error else Color.Unspecified,
+            )
         }
     }
 }

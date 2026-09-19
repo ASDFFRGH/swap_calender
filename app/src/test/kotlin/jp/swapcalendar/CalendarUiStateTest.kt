@@ -89,6 +89,34 @@ class CalendarUiStateTest {
         assertEquals(null, state.estimatedDailySwap(state.rows))
     }
 
+    @Test
+    fun `sums held swap amounts for the visible month`() {
+        val secondDay = row.copy(tradeDate = "2026-09-02", buySwap = "100.5")
+        val hidden = row.copy(pairId = "3", symbol = "EUR/JPY", buySwap = "500")
+        val state = CalendarUiState(
+            month = YearMonth.of(2026, 9),
+            rows = listOf(row, secondDay, hidden),
+            pairSettings = PairSettings(
+                hidden = setOf("EUR/JPY"),
+                quantities = mapOf("USD/JPY" to 20_000L, "EUR/JPY" to 10_000L),
+            ),
+        )
+
+        assertEquals(2_002L, state.estimatedMonthlySwap())
+    }
+
+    @Test
+    fun `returns unpublished monthly total when a held value is missing`() {
+        val unpublished = row.copy(tradeDate = "2026-09-02", buySwap = null)
+        val state = CalendarUiState(
+            month = YearMonth.of(2026, 9),
+            rows = listOf(row, unpublished),
+            pairSettings = PairSettings(quantities = mapOf("USD/JPY" to 20_000L)),
+        )
+
+        assertEquals(null, state.estimatedMonthlySwap())
+    }
+
     private fun state(side: PositionSide) = CalendarUiState(
         month = YearMonth.of(2026, 9),
         rows = listOf(row),
