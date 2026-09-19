@@ -16,17 +16,22 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -35,6 +40,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -43,10 +51,13 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.net.toUri
 import dagger.hilt.android.AndroidEntryPoint
+import jp.swapcalendar.data.PositionSide
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -69,7 +80,22 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun SwapCalendarScreen(viewModel: CalendarViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    Scaffold(topBar = { TopAppBar(title = { Text("スワップカレンダー") }) }) { padding ->
+    if (state.settingsOpen) {
+        PairSettingsDialog(
+            state = state,
+            onDismiss = viewModel::closeSettings,
+            onVisibleChange = viewModel::setPairVisible,
+            onMove = viewModel::movePair,
+            onQuantityChange = viewModel::setQuantity,
+            onSideChange = viewModel::setSide,
+        )
+    }
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text("スワップカレンダー") },
+            actions = { TextButton(onClick = viewModel::openSettings) { Text("設定") } },
+        )
+    }) { padding ->
         Column(
             Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -77,7 +103,7 @@ fun SwapCalendarScreen(viewModel: CalendarViewModel = hiltViewModel()) {
             MonthNavigation(state, { viewModel.moveMonth(-1) }, { viewModel.moveMonth(1) }, viewModel::refresh)
             if (state.symbols.isNotEmpty()) {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    state.symbols.forEach { symbol ->
+                    state.symbols.filterNot(state.pairSettings.hidden::contains).forEach { symbol ->
                         AssistChip(
                             onClick = { viewModel.togglePair(symbol) },
                             label = { Text(if (symbol in state.selectedPairs) "✓ $symbol" else symbol) },
@@ -86,6 +112,7 @@ fun SwapCalendarScreen(viewModel: CalendarViewModel = hiltViewModel()) {
                 }
             }
             CalendarGrid(state, viewModel::selectDate)
+            Text("SP日数が通貨ペアで異なる日は「1・3日」のようにすべて表示します。", style = MaterialTheme.typography.bodySmall)
             state.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (state.rows.isEmpty() && !state.refreshing) Text("この月の保存済みデータはありません。更新してください。")
             DayDetails(state)
@@ -133,8 +160,9 @@ private fun CalendarGrid(state: CalendarUiState, selectDate: (LocalDate) -> Unit
                     if (date != null) Column(Modifier.padding(5.dp)) {
                         Text(date.dayOfMonth.toString(), fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
                         val days = rows.map { it.spDays }.distinct()
-                        if (days.size == 1) Text("SP ${days.first()}日", style = MaterialTheme.typography.labelSmall)
-                        else if (days.size > 1) Text("SP 複数", style = MaterialTheme.typography.labelSmall)
+                        if (days.isNotEmpty()) {
+                            Text("SP ${days.sorted().joinToString("・")}日", style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 }
             }
@@ -150,11 +178,91 @@ private fun DayDetails(state: CalendarUiState) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(row.symbol, fontWeight = FontWeight.Bold)
                 Text("SP日数: ${row.spDays}日")
-                ValueRow("買", row.buySwap)
-                ValueRow("売", row.sellSwap)
+                ValueRow("買（1万通貨）", row.buySwap)
+                ValueRow("売（1万通貨）", row.sellSwap)
+                val quantity = state.quantity(row.symbol)
+                if (quantity > 0) {
+                    val side = if (state.side(row.symbol) == PositionSide.BUY) "買" else "売"
+                    Text("保有: ${"%,d".format(quantity)}通貨・$side")
+                    val estimate = state.estimatedSwap(row)
+                    Text(
+                        if (estimate == null) "実額: — 未発表" else "実額: ${"%,d".format(estimate)}円",
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }
+}
+
+@Composable
+private fun PairSettingsDialog(
+    state: CalendarUiState,
+    onDismiss: () -> Unit,
+    onVisibleChange: (String, Boolean) -> Unit,
+    onMove: (String, Int) -> Unit,
+    onQuantityChange: (String, String) -> Unit,
+    onSideChange: (String, PositionSide) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("通貨ペア設定") },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("上下ボタンで表示優先度を変更できます。保有数量は通貨単位で入力してください。", style = MaterialTheme.typography.bodySmall)
+                state.symbols.forEachIndexed { index, symbol ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = symbol !in state.pairSettings.hidden,
+                                    onCheckedChange = { onVisibleChange(symbol, it) },
+                                )
+                                Text(symbol, Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                                TextButton(onClick = { onMove(symbol, -1) }, enabled = index > 0) { Text("↑") }
+                                TextButton(onClick = { onMove(symbol, 1) }, enabled = index < state.symbols.lastIndex) { Text("↓") }
+                            }
+                            QuantityField(symbol, state.quantity(symbol), onQuantityChange)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterChip(
+                                    selected = state.side(symbol) == PositionSide.BUY,
+                                    onClick = { onSideChange(symbol, PositionSide.BUY) },
+                                    label = { Text("買ポジション") },
+                                )
+                                FilterChip(
+                                    selected = state.side(symbol) == PositionSide.SELL,
+                                    onClick = { onSideChange(symbol, PositionSide.SELL) },
+                                    label = { Text("売ポジション") },
+                                )
+                            }
+                        }
+                    }
+                }
+                Text("実額 =（保有通貨数量 ÷ 10,000）× 掲載スワップ。受取・支払ともGMO外貨の端数処理に合わせて円単位へ丸めます。", style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = { Button(onClick = onDismiss) { Text("完了") } },
+    )
+}
+
+@Composable
+private fun QuantityField(symbol: String, persisted: Long, onChange: (String, String) -> Unit) {
+    var text by remember(symbol) { mutableStateOf(if (persisted > 0) persisted.toString() else "") }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { value ->
+            text = value.filter(Char::isDigit).take(12)
+            onChange(symbol, text)
+        },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("保有通貨数量") },
+        suffix = { Text("通貨") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+    )
 }
 
 @Composable
