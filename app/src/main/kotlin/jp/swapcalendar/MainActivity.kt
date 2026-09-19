@@ -80,6 +80,21 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun SwapCalendarScreen(viewModel: CalendarViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    state.updateInfo?.let { update ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissUpdate,
+            title = { Text("新しいバージョンがあります") },
+            text = { Text("バージョン ${update.version} が公開されています。更新ページから最新版APKをインストールできます。") },
+            dismissButton = { TextButton(onClick = viewModel::dismissUpdate) { Text("あとで") } },
+            confirmButton = {
+                Button(onClick = {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, update.releaseUrl.toUri()))
+                    viewModel.dismissUpdate()
+                }) { Text("更新ページを開く") }
+            },
+        )
+    }
     if (state.settingsOpen) {
         PairSettingsDialog(
             state = state,

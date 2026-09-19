@@ -14,6 +14,7 @@ import io.ktor.serialization.kotlinx.json.json
 import jp.swapcalendar.data.SwapApi
 import jp.swapcalendar.data.SwapDao
 import jp.swapcalendar.data.SwapDatabase
+import jp.swapcalendar.data.ReleaseUpdateChecker
 import kotlinx.serialization.json.Json
 import javax.inject.Singleton
 
@@ -35,5 +36,8 @@ object AppModule {
 
     @Provides @Singleton
     fun api(client: HttpClient): SwapApi = SwapApi(client, BuildConfig.API_BASE_URL)
-}
 
+    @Provides @Singleton
+    fun releaseUpdateChecker(client: HttpClient): ReleaseUpdateChecker =
+        ReleaseUpdateChecker(client, BuildConfig.VERSION_NAME)
+}

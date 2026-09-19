@@ -9,6 +9,8 @@ import jp.swapcalendar.data.SwapRepository
 import jp.swapcalendar.data.PairSettings
 import jp.swapcalendar.data.PairSettingsStore
 import jp.swapcalendar.data.PositionSide
+import jp.swapcalendar.data.ReleaseUpdateChecker
+import jp.swapcalendar.data.UpdateInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -34,6 +36,7 @@ data class CalendarUiState(
     val message: String? = null,
     val pairSettings: PairSettings = PairSettings(),
     val settingsOpen: Boolean = false,
+    val updateInfo: UpdateInfo? = null,
 ) {
     val symbols: List<String> get() = pairSettings.orderedSymbols(rows.map { it.symbol }.distinct())
     val visibleRows: List<SwapPointRow> get() {
@@ -66,6 +69,7 @@ data class CalendarUiState(
 class CalendarViewModel @Inject constructor(
     private val repository: SwapRepository,
     private val settingsStore: PairSettingsStore,
+    private val updateChecker: ReleaseUpdateChecker,
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
     private val initialMonth = savedStateHandle.get<String>("month")?.let(YearMonth::parse)
@@ -76,11 +80,13 @@ class CalendarViewModel @Inject constructor(
     private val refreshing = MutableStateFlow(false)
     private val message = MutableStateFlow<String?>(null)
     private val settingsOpen = MutableStateFlow(false)
+    private val updateInfo = MutableStateFlow<UpdateInfo?>(null)
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val cached = month.flatMapLatest { repository.observeMonth(it.toString()) }
     private val selection = combine(month, cached, selectedDate, selectedPairs, ::Selection)
-    private val configuration = combine(selection, settingsStore.settings, settingsOpen, ::Configuration)
+    private val preferences = combine(settingsStore.settings, settingsOpen, updateInfo, ::Preferences)
+    private val configuration = combine(selection, preferences, ::Configuration)
     val uiState: StateFlow<CalendarUiState> = combine(configuration, refreshing, message) { configuration, isRefreshing, currentMessage ->
         val selection = configuration.selection
         CalendarUiState(
@@ -92,12 +98,18 @@ class CalendarViewModel @Inject constructor(
             lastSyncedAt = selection.cached.metadata?.lastSyncedAt,
             refreshing = isRefreshing,
             message = currentMessage,
-            pairSettings = configuration.settings,
-            settingsOpen = configuration.settingsOpen,
+            pairSettings = configuration.preferences.settings,
+            settingsOpen = configuration.preferences.settingsOpen,
+            updateInfo = configuration.preferences.updateInfo,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CalendarUiState(initialMonth))
 
-    init { refresh() }
+    init {
+        refresh()
+        viewModelScope.launch {
+            updateInfo.value = runCatching { updateChecker.findUpdate() }.getOrNull()
+        }
+    }
 
     fun moveMonth(offset: Long) {
         month.value = month.value.plusMonths(offset)
@@ -116,6 +128,7 @@ class CalendarViewModel @Inject constructor(
 
     fun openSettings() { settingsOpen.value = true }
     fun closeSettings() { settingsOpen.value = false }
+    fun dismissUpdate() { updateInfo.value = null }
     fun setPairVisible(symbol: String, visible: Boolean) {
         viewModelScope.launch { settingsStore.setVisible(symbol, visible) }
     }
@@ -151,6 +164,11 @@ private data class Selection(
 
 private data class Configuration(
     val selection: Selection,
+    val preferences: Preferences,
+)
+
+private data class Preferences(
     val settings: PairSettings,
     val settingsOpen: Boolean,
+    val updateInfo: UpdateInfo?,
 )
