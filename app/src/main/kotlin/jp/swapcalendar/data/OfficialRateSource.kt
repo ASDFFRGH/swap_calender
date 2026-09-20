@@ -43,9 +43,10 @@ class OfficialRateSource @Inject constructor(private val client: HttpClient) {
 }
 
 internal fun parseOfficialRates(pageHtml: String, rateJson: String): FxRateSnapshot {
-    val symbolsByCode = Jsoup.parse(pageHtml).select(".commoditie-parent[data-code]").associate { row ->
-        row.attr("data-code") to (row.selectFirst(".fxPair")?.text() ?: error("通貨ペア名がありません"))
-    }
+    val symbolsByCode = Jsoup.parse(pageHtml).select(".commoditie-parent[data-code]").mapNotNull { row ->
+        val symbol = row.selectFirst(".fxPair")?.text()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+        row.attr("data-code") to symbol
+    }.toMap()
     val root = Json.parseToJsonElement(rateJson).jsonObject
     val fetchedAt = root["time"]?.jsonPrimitive?.content ?: error("レート取得日時がありません")
     val rateObject = root["rate"]?.jsonObject ?: error("為替レートがありません")

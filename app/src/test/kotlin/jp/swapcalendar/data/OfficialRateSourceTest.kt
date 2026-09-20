@@ -8,6 +8,7 @@ class OfficialRateSourceTest {
     @Test
     fun `maps official pair codes to bid and ask rates`() {
         val page = """<table>
+            <tr class="commoditie-parent" data-code="999"><td>表示用の補助行</td></tr>
             <tr class="commoditie-parent" data-code="2"><td><span class="fxPair">USD/JPY</span></td></tr>
             <tr class="commoditie-parent" data-code="1"><td><span class="fxPair">EUR/USD</span></td></tr>
         </table>"""
