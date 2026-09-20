@@ -74,6 +74,7 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.math.BigDecimal
+import java.math.RoundingMode
 import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
@@ -202,10 +203,17 @@ private fun LeverageCalculatorScreen(
     var deposit by rememberSaveable { mutableStateOf("") }
     var loss by rememberSaveable { mutableStateOf("") }
     var leverage by rememberSaveable { mutableStateOf("") }
+    var side by rememberSaveable { mutableStateOf(PositionSide.BUY) }
     var pairMenuOpen by remember { mutableStateOf(false) }
     val selectedRate = state.rates.firstOrNull { it.symbol == state.selectedSymbol }
     val baseCurrency = state.selectedSymbol?.substringBefore("/")
+    val quoteCurrency = state.selectedSymbol?.substringAfter("/")
     val baseJpyRate = state.rates.firstOrNull { it.symbol == "$baseCurrency/JPY" }?.midpoint
+    val quoteJpyRate = when (quoteCurrency) {
+        "JPY" -> BigDecimal.ONE
+        null -> null
+        else -> state.rates.firstOrNull { it.symbol == "$quoteCurrency/JPY" }?.midpoint
+    }
     val calculation = if (baseJpyRate != null) {
         calculateQuantity(
             deposit.toBigDecimalOrNull() ?: BigDecimal.ZERO,
@@ -213,6 +221,9 @@ private fun LeverageCalculatorScreen(
             leverage.toBigDecimalOrNull() ?: BigDecimal.ZERO,
             baseJpyRate,
         )
+    } else null
+    val lossCut = if (calculation != null && selectedRate != null && quoteJpyRate != null) {
+        estimateLossCut(calculation, selectedRate.midpoint, quoteJpyRate, side)
     } else null
 
     Column(
@@ -240,6 +251,18 @@ private fun LeverageCalculatorScreen(
         }
         MoneyInput(deposit, { deposit = it }, "現在の入金額")
         MoneyInput(loss, { loss = it }, "現在の含み損")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = side == PositionSide.BUY,
+                onClick = { side = PositionSide.BUY },
+                label = { Text("買いポジション") },
+            )
+            FilterChip(
+                selected = side == PositionSide.SELL,
+                onClick = { side = PositionSide.SELL },
+                label = { Text("売りポジション") },
+            )
+        }
         OutlinedTextField(
             value = leverage,
             onValueChange = { leverage = decimalInput(it) },
@@ -257,6 +280,22 @@ private fun LeverageCalculatorScreen(
                     Text("1万通貨単位: ${calculation.quantity / 10_000.0} Lot相当")
                     Text("有効資産: ${"%,.0f".format(calculation.effectiveEquity)}円")
                     Text("計算後レバレッジ: ${calculation.actualLeverage.stripTrailingZeros().toPlainString()}倍")
+                    lossCut?.let { estimate ->
+                        Text(
+                            "推定ロスカットレート: ${formatRate(estimate.triggerRate)}",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Text(
+                            if (side == PositionSide.BUY) {
+                                "現在値から約 ${formatRate(estimate.rateDistance)} 下落"
+                            } else {
+                                "現在値から約 ${formatRate(estimate.rateDistance)} 上昇"
+                            },
+                        )
+                        Text("ロスカットまでの追加損失余力: ${"%,.0f".format(estimate.lossAllowance)}円")
+                    }
                 } else {
                     Text(if (deposit.isNotBlank() && loss.isNotBlank() && leverage.isNotBlank()) "入力値または円換算レートを確認してください。" else "金額と目標レバレッジを入力してください。")
                 }
@@ -275,7 +314,7 @@ private fun LeverageCalculatorScreen(
                 }
             }
         }
-        Text("有効資産（入金額－含み損）×目標レバレッジ÷基準通貨の円換算レートで算出し、1通貨未満を切り捨てます。参考値としてご利用ください。", style = MaterialTheme.typography.bodySmall)
+        Text("有効資産（入金額－含み損）×目標レバレッジ÷基準通貨の円換算レートで算出し、1通貨未満を切り捨てます。ロスカットは個人口座の維持証拠金率4%・維持率50%を前提とする概算です。複数ポジション、スプレッド、スワップ、出金依頼、基準レートの更新、相場急変による約定差は含みません。", style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -299,6 +338,10 @@ private fun decimalInput(value: String): String = value.filter { it.isDigit() ||
 private fun formatRateTimestamp(raw: String): String = if (raw.length >= 14) {
     "${raw.substring(0, 4)}/${raw.substring(4, 6)}/${raw.substring(6, 8)} ${raw.substring(8, 10)}:${raw.substring(10, 12)}:${raw.substring(12, 14)}"
 } else raw
+
+private fun formatRate(value: BigDecimal): String = value.setScale(5, RoundingMode.HALF_UP)
+    .stripTrailingZeros()
+    .toPlainString()
 
 @Composable
 private fun MonthlySwapTotal(state: CalendarUiState) {

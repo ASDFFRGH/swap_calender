@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import jp.swapcalendar.data.FxRate
 import jp.swapcalendar.data.OfficialRateSource
+import jp.swapcalendar.data.PositionSide
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +29,13 @@ data class LeverageCalculation(
     val actualLeverage: BigDecimal,
 )
 
+data class LossCutEstimate(
+    val triggerRate: BigDecimal,
+    val rateDistance: BigDecimal,
+    val lossAllowance: BigDecimal,
+    val maintenanceMargin: BigDecimal,
+)
+
 internal fun calculateQuantity(
     deposit: BigDecimal,
     unrealizedLoss: BigDecimal,
@@ -39,6 +47,31 @@ internal fun calculateQuantity(
     val quantity = equity.multiply(leverage).divide(baseJpyRate, 0, RoundingMode.FLOOR).longValueExact()
     val actual = baseJpyRate.multiply(BigDecimal.valueOf(quantity)).divide(equity, 3, RoundingMode.HALF_UP)
     return LeverageCalculation(equity, baseJpyRate, quantity, actual)
+}
+
+internal fun estimateLossCut(
+    calculation: LeverageCalculation,
+    currentPairRate: BigDecimal,
+    quoteJpyRate: BigDecimal,
+    side: PositionSide,
+): LossCutEstimate? {
+    if (calculation.quantity <= 0 || currentPairRate <= BigDecimal.ZERO || quoteJpyRate <= BigDecimal.ZERO) return null
+    val maintenanceMargin = calculation.baseJpyRate
+        .multiply(BigDecimal.valueOf(calculation.quantity))
+        .multiply(BigDecimal("0.04"))
+    val lossCutEquity = maintenanceMargin.multiply(BigDecimal("0.5"))
+    val allowance = calculation.effectiveEquity.subtract(lossCutEquity)
+    if (allowance <= BigDecimal.ZERO) return null
+    val distance = allowance.divide(
+        BigDecimal.valueOf(calculation.quantity).multiply(quoteJpyRate),
+        8,
+        RoundingMode.HALF_UP,
+    )
+    val trigger = when (side) {
+        PositionSide.BUY -> currentPairRate.subtract(distance).max(BigDecimal.ZERO)
+        PositionSide.SELL -> currentPairRate.add(distance)
+    }
+    return LossCutEstimate(trigger, distance, allowance, maintenanceMargin)
 }
 
 @HiltViewModel
