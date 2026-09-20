@@ -28,10 +28,20 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -42,6 +52,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,6 +73,8 @@ import jp.swapcalendar.data.PositionSide
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.math.BigDecimal
+import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -78,9 +92,16 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SwapCalendarScreen(viewModel: CalendarViewModel = hiltViewModel()) {
+fun SwapCalendarScreen(
+    viewModel: CalendarViewModel = hiltViewModel(),
+    leverageViewModel: LeverageViewModel = hiltViewModel(),
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val leverageState by leverageViewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    var destination by rememberSaveable { mutableStateOf(AppDestination.CALENDAR) }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
     state.updateInfo?.let { update ->
         AlertDialog(
             onDismissRequest = viewModel::dismissUpdate,
@@ -105,14 +126,50 @@ fun SwapCalendarScreen(viewModel: CalendarViewModel = hiltViewModel()) {
             onSideChange = viewModel::setSide,
         )
     }
-    Scaffold(topBar = {
-        TopAppBar(
-            title = { Text("スワップカレンダー") },
-            actions = { TextButton(onClick = viewModel::openSettings) { Text("設定") } },
-        )
-    }) { padding ->
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet {
+                Text("スワップカレンダー", Modifier.padding(20.dp), style = MaterialTheme.typography.titleLarge)
+                NavigationDrawerItem(
+                    label = { Text("カレンダー") },
+                    selected = destination == AppDestination.CALENDAR,
+                    onClick = { destination = AppDestination.CALENDAR; scope.launch { drawerState.close() } },
+                )
+                NavigationDrawerItem(
+                    label = { Text("保有数量計算") },
+                    selected = destination == AppDestination.LEVERAGE,
+                    onClick = { destination = AppDestination.LEVERAGE; scope.launch { drawerState.close() } },
+                )
+            }
+        },
+    ) {
+        Scaffold(topBar = {
+            TopAppBar(
+                navigationIcon = { IconButton(onClick = { scope.launch { drawerState.open() } }) { Text("☰") } },
+                title = { Text(if (destination == AppDestination.CALENDAR) "スワップカレンダー" else "保有数量計算") },
+                actions = {
+                    if (destination == AppDestination.CALENDAR) {
+                        TextButton(onClick = viewModel::openSettings) { Text("設定") }
+                    }
+                },
+            )
+        }) { padding ->
+            if (destination == AppDestination.CALENDAR) {
+                CalendarContent(state, viewModel, Modifier.padding(padding))
+            } else {
+                LeverageCalculatorScreen(leverageState, leverageViewModel, Modifier.padding(padding))
+            }
+        }
+    }
+}
+
+private enum class AppDestination { CALENDAR, LEVERAGE }
+
+@Composable
+private fun CalendarContent(state: CalendarUiState, viewModel: CalendarViewModel, modifier: Modifier = Modifier) {
         Column(
-            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
+            modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             MonthNavigation(state, { viewModel.moveMonth(-1) }, { viewModel.moveMonth(1) }, viewModel::refresh)
@@ -133,8 +190,115 @@ fun SwapCalendarScreen(viewModel: CalendarViewModel = hiltViewModel()) {
             DayDetails(state)
             SourceInfo(state)
         }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LeverageCalculatorScreen(
+    state: LeverageUiState,
+    viewModel: LeverageViewModel,
+    modifier: Modifier = Modifier,
+) {
+    var deposit by rememberSaveable { mutableStateOf("") }
+    var loss by rememberSaveable { mutableStateOf("") }
+    var leverage by rememberSaveable { mutableStateOf("") }
+    var pairMenuOpen by remember { mutableStateOf(false) }
+    val selectedRate = state.rates.firstOrNull { it.symbol == state.selectedSymbol }
+    val baseCurrency = state.selectedSymbol?.substringBefore("/")
+    val baseJpyRate = state.rates.firstOrNull { it.symbol == "$baseCurrency/JPY" }?.midpoint
+    val calculation = if (baseJpyRate != null) {
+        calculateQuantity(
+            deposit.toBigDecimalOrNull() ?: BigDecimal.ZERO,
+            loss.toBigDecimalOrNull() ?: BigDecimal.ZERO,
+            leverage.toBigDecimalOrNull() ?: BigDecimal.ZERO,
+            baseJpyRate,
+        )
+    } else null
+
+    Column(
+        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("現在の口座状況と目標レバレッジから、保有通貨数量を計算します。")
+        ExposedDropdownMenuBox(expanded = pairMenuOpen, onExpandedChange = { pairMenuOpen = it }) {
+            OutlinedTextField(
+                value = state.selectedSymbol ?: "",
+                onValueChange = {},
+                readOnly = true,
+                modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                label = { Text("通貨ペア") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(pairMenuOpen) },
+            )
+            ExposedDropdownMenu(expanded = pairMenuOpen, onDismissRequest = { pairMenuOpen = false }) {
+                state.rates.forEach { rate ->
+                    DropdownMenuItem(
+                        text = { Text(rate.symbol) },
+                        onClick = { viewModel.select(rate.symbol); pairMenuOpen = false },
+                    )
+                }
+            }
+        }
+        MoneyInput(deposit, { deposit = it }, "現在の入金額")
+        MoneyInput(loss, { loss = it }, "現在の含み損")
+        OutlinedTextField(
+            value = leverage,
+            onValueChange = { leverage = decimalInput(it) },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("目標レバレッジ") },
+            suffix = { Text("倍") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        )
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("計算結果", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                if (calculation != null) {
+                    Text("推奨保有数量: ${"%,d".format(calculation.quantity)}通貨", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("1万通貨単位: ${calculation.quantity / 10_000.0} Lot相当")
+                    Text("有効資産: ${"%,.0f".format(calculation.effectiveEquity)}円")
+                    Text("計算後レバレッジ: ${calculation.actualLeverage.stripTrailingZeros().toPlainString()}倍")
+                } else {
+                    Text(if (deposit.isNotBlank() && loss.isNotBlank() && leverage.isNotBlank()) "入力値または円換算レートを確認してください。" else "金額と目標レバレッジを入力してください。")
+                }
+            }
+        }
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("取得時点の為替相場", fontWeight = FontWeight.Bold)
+                selectedRate?.let { Text("${it.symbol}: Bid ${it.bid.toPlainString()} / Ask ${it.ask.toPlainString()}") }
+                baseJpyRate?.let { Text("円換算レート: 1 $baseCurrency = ${it.stripTrailingZeros().toPlainString()}円（Bid/Ask中間値）") }
+                state.fetchedAt?.let { Text("取得日時: ${formatRateTimestamp(it)}", style = MaterialTheme.typography.bodySmall) }
+                state.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                Button(onClick = viewModel::refresh, enabled = !state.loading, modifier = Modifier.fillMaxWidth()) {
+                    if (state.loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text(if (state.loading) " 取得中" else "為替相場を更新")
+                }
+            }
+        }
+        Text("有効資産（入金額－含み損）×目標レバレッジ÷基準通貨の円換算レートで算出し、1通貨未満を切り捨てます。参考値としてご利用ください。", style = MaterialTheme.typography.bodySmall)
     }
 }
+
+@Composable
+private fun MoneyInput(value: String, onChange: (String) -> Unit, label: String) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { onChange(decimalInput(it)) },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text(label) },
+        suffix = { Text("円") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+    )
+}
+
+private fun decimalInput(value: String): String = value.filter { it.isDigit() || it == '.' }
+    .let { filtered -> if (filtered.count { it == '.' } <= 1) filtered else filtered.substringBeforeLast('.') }
+    .take(16)
+
+private fun formatRateTimestamp(raw: String): String = if (raw.length >= 14) {
+    "${raw.substring(0, 4)}/${raw.substring(4, 6)}/${raw.substring(6, 8)} ${raw.substring(8, 10)}:${raw.substring(10, 12)}:${raw.substring(12, 14)}"
+} else raw
 
 @Composable
 private fun MonthlySwapTotal(state: CalendarUiState) {
