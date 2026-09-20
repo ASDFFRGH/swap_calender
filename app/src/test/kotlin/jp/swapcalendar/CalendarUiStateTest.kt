@@ -106,7 +106,7 @@ class CalendarUiStateTest {
     }
 
     @Test
-    fun `returns unpublished monthly total when a held value is missing`() {
+    fun `excludes unpublished days from monthly total`() {
         val unpublished = row.copy(tradeDate = "2026-09-02", buySwap = null)
         val state = CalendarUiState(
             month = YearMonth.of(2026, 9),
@@ -114,7 +114,18 @@ class CalendarUiStateTest {
             pairSettings = PairSettings(quantities = mapOf("USD/JPY" to 20_000L)),
         )
 
-        assertEquals(null, state.estimatedMonthlySwap())
+        assertEquals(1_801L, state.estimatedMonthlySwap())
+    }
+
+    @Test
+    fun `returns zero when all held days are unpublished`() {
+        val state = CalendarUiState(
+            month = YearMonth.of(2026, 9),
+            rows = listOf(row.copy(buySwap = null)),
+            pairSettings = PairSettings(quantities = mapOf("USD/JPY" to 20_000L)),
+        )
+
+        assertEquals(0L, state.estimatedMonthlySwap())
     }
 
     private fun state(side: PositionSide) = CalendarUiState(

@@ -79,9 +79,10 @@ data class CalendarUiState(
     fun estimatedMonthlySwap(): Long? {
         val heldRows = visibleRows.filter { quantity(it.symbol) > 0 }
         if (heldRows.isEmpty()) return null
-        val estimates = heldRows.map { estimatedSwap(it) }
-        if (estimates.any { it == null }) return null
-        return estimates.filterNotNull().sum()
+        return heldRows.groupBy { it.tradeDate }
+            .values
+            .mapNotNull(::estimatedDailySwap)
+            .sum()
     }
 }
 
