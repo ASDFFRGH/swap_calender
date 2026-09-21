@@ -200,10 +200,6 @@ private fun LeverageCalculatorScreen(
     viewModel: LeverageViewModel,
     modifier: Modifier = Modifier,
 ) {
-    var deposit by rememberSaveable { mutableStateOf("") }
-    var loss by rememberSaveable { mutableStateOf("") }
-    var leverage by rememberSaveable { mutableStateOf("") }
-    var side by rememberSaveable { mutableStateOf(PositionSide.BUY) }
     var pairMenuOpen by remember { mutableStateOf(false) }
     val selectedRate = state.rates.firstOrNull { it.symbol == state.selectedSymbol }
     val baseCurrency = state.selectedSymbol?.substringBefore("/")
@@ -216,14 +212,14 @@ private fun LeverageCalculatorScreen(
     }
     val calculation = if (baseJpyRate != null) {
         calculateQuantity(
-            deposit.toBigDecimalOrNull() ?: BigDecimal.ZERO,
-            loss.toBigDecimalOrNull() ?: BigDecimal.ZERO,
-            leverage.toBigDecimalOrNull() ?: BigDecimal.ZERO,
+            state.deposit.toBigDecimalOrNull() ?: BigDecimal.ZERO,
+            state.unrealizedLoss.toBigDecimalOrNull() ?: BigDecimal.ZERO,
+            state.targetLeverage.toBigDecimalOrNull() ?: BigDecimal.ZERO,
             baseJpyRate,
         )
     } else null
     val lossCut = if (calculation != null && selectedRate != null && quoteJpyRate != null) {
-        estimateLossCut(calculation, selectedRate.midpoint, quoteJpyRate, side)
+        estimateLossCut(calculation, selectedRate.midpoint, quoteJpyRate, state.side)
     } else null
 
     Column(
@@ -249,23 +245,23 @@ private fun LeverageCalculatorScreen(
                 }
             }
         }
-        MoneyInput(deposit, { deposit = it }, "現在の入金額")
-        MoneyInput(loss, { loss = it }, "現在の含み損")
+        MoneyInput(state.deposit, { viewModel.setDeposit(it) }, "現在の入金額")
+        MoneyInput(state.unrealizedLoss, { viewModel.setUnrealizedLoss(it) }, "現在の含み損")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
-                selected = side == PositionSide.BUY,
-                onClick = { side = PositionSide.BUY },
+                selected = state.side == PositionSide.BUY,
+                onClick = { viewModel.setSide(PositionSide.BUY) },
                 label = { Text("買いポジション") },
             )
             FilterChip(
-                selected = side == PositionSide.SELL,
-                onClick = { side = PositionSide.SELL },
+                selected = state.side == PositionSide.SELL,
+                onClick = { viewModel.setSide(PositionSide.SELL) },
                 label = { Text("売りポジション") },
             )
         }
         OutlinedTextField(
-            value = leverage,
-            onValueChange = { leverage = decimalInput(it) },
+            value = state.targetLeverage,
+            onValueChange = { viewModel.setTargetLeverage(decimalInput(it)) },
             modifier = Modifier.fillMaxWidth(),
             label = { Text("目標レバレッジ") },
             suffix = { Text("倍") },
@@ -288,7 +284,7 @@ private fun LeverageCalculatorScreen(
                             color = MaterialTheme.colorScheme.error,
                         )
                         Text(
-                            if (side == PositionSide.BUY) {
+                            if (state.side == PositionSide.BUY) {
                                 "現在値から約 ${formatRate(estimate.rateDistance)} 下落"
                             } else {
                                 "現在値から約 ${formatRate(estimate.rateDistance)} 上昇"
@@ -297,7 +293,7 @@ private fun LeverageCalculatorScreen(
                         Text("ロスカットまでの追加損失余力: ${"%,.0f".format(estimate.lossAllowance)}円")
                     }
                 } else {
-                    Text(if (deposit.isNotBlank() && loss.isNotBlank() && leverage.isNotBlank()) "入力値または円換算レートを確認してください。" else "金額と目標レバレッジを入力してください。")
+                    Text(if (state.deposit.isNotBlank() && state.unrealizedLoss.isNotBlank() && state.targetLeverage.isNotBlank()) "入力値または円換算レートを確認してください。" else "金額と目標レバレッジを入力してください。")
                 }
             }
         }

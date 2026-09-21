@@ -6,6 +6,8 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import jp.swapcalendar.data.FxRate
 import jp.swapcalendar.data.OfficialRateSource
 import jp.swapcalendar.data.PositionSide
+import jp.swapcalendar.data.LeverageSettings
+import jp.swapcalendar.data.LeverageSettingsStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,6 +22,10 @@ data class LeverageUiState(
     val fetchedAt: String? = null,
     val loading: Boolean = false,
     val message: String? = null,
+    val deposit: String = "",
+    val unrealizedLoss: String = "",
+    val targetLeverage: String = "",
+    val side: PositionSide = PositionSide.BUY,
 )
 
 data class LeverageCalculation(
@@ -75,14 +81,51 @@ internal fun estimateLossCut(
 }
 
 @HiltViewModel
-class LeverageViewModel @Inject constructor(private val rateSource: OfficialRateSource) : ViewModel() {
+class LeverageViewModel @Inject constructor(
+    private val rateSource: OfficialRateSource,
+    private val settingsStore: LeverageSettingsStore,
+) : ViewModel() {
     private val mutableState = MutableStateFlow(LeverageUiState())
     val state: StateFlow<LeverageUiState> = mutableState.asStateFlow()
 
-    init { refresh() }
+    init {
+        viewModelScope.launch {
+            settingsStore.settings.collect { settings ->
+                mutableState.value = mutableState.value.copy(
+                    selectedSymbol = settings.symbol ?: mutableState.value.selectedSymbol,
+                    deposit = settings.deposit,
+                    unrealizedLoss = settings.unrealizedLoss,
+                    targetLeverage = settings.targetLeverage,
+                    side = settings.side,
+                )
+            }
+        }
+        refresh()
+    }
 
     fun select(symbol: String) {
         mutableState.value = mutableState.value.copy(selectedSymbol = symbol)
+        persist()
+    }
+
+    fun setDeposit(value: String) { mutableState.value = mutableState.value.copy(deposit = value); persist() }
+    fun setUnrealizedLoss(value: String) { mutableState.value = mutableState.value.copy(unrealizedLoss = value); persist() }
+    fun setTargetLeverage(value: String) { mutableState.value = mutableState.value.copy(targetLeverage = value); persist() }
+    fun setSide(value: PositionSide) { mutableState.value = mutableState.value.copy(side = value); persist() }
+
+    private fun persist() {
+        val current = mutableState.value
+        viewModelScope.launch {
+            settingsStore.update(
+                LeverageSettings(
+                    symbol = current.selectedSymbol,
+                    deposit = current.deposit,
+                    unrealizedLoss = current.unrealizedLoss,
+                    targetLeverage = current.targetLeverage,
+                    side = current.side,
+                ),
+            )
+        }
     }
 
     fun refresh() {
