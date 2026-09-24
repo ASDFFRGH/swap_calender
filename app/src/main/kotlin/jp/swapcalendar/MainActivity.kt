@@ -210,23 +210,38 @@ private fun LeverageCalculatorScreen(
         null -> null
         else -> state.rates.firstOrNull { it.symbol == "$quoteCurrency/JPY" }?.midpoint
     }
-    val calculation = if (baseJpyRate != null) {
-        calculateQuantity(
-            state.deposit.toBigDecimalOrNull() ?: BigDecimal.ZERO,
-            state.unrealizedLoss.toBigDecimalOrNull() ?: BigDecimal.ZERO,
-            state.targetLeverage.toBigDecimalOrNull() ?: BigDecimal.ZERO,
-            baseJpyRate,
+    val positions = state.pairSettings.quantities.mapNotNull { (symbol, quantity) ->
+        val currency = symbol.substringBefore("/")
+        val yenRate = if (currency == "JPY") BigDecimal.ONE else state.rates.firstOrNull { it.symbol == "$currency/JPY" }?.midpoint
+        yenRate?.let {
+            PositionValuation(
+                symbol = symbol,
+                quantity = quantity,
+                exposure = it.multiply(BigDecimal.valueOf(quantity)),
+                unrealizedPnl = state.unrealizedPnls[symbol]?.toBigDecimalOrNull() ?: BigDecimal.ZERO,
+            )
+        }
+    }
+    val calculation = baseJpyRate?.let {
+        calculatePortfolio(
+            deposit = state.deposit.toBigDecimalOrNull() ?: BigDecimal.ZERO,
+            positions = positions,
+            legacyUnrealizedLoss = state.unrealizedLoss.toBigDecimalOrNull() ?: BigDecimal.ZERO,
+            targetLeverage = state.targetLeverage.toBigDecimalOrNull() ?: BigDecimal.ZERO,
+            additionalBaseJpyRate = it,
         )
-    } else null
+    }
+    val selectedQuantity = state.selectedSymbol?.let { state.pairSettings.quantities[it] } ?: 0L
+    val selectedSide = state.selectedSymbol?.let { state.pairSettings.sides[it] } ?: state.side
     val lossCut = if (calculation != null && selectedRate != null && quoteJpyRate != null) {
-        estimateLossCut(calculation, selectedRate.midpoint, quoteJpyRate, state.side)
+        estimatePortfolioLossCut(calculation, selectedQuantity, selectedRate.midpoint, quoteJpyRate, selectedSide)
     } else null
 
     Column(
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("現在の口座状況と目標レバレッジから、保有通貨数量を計算します。")
+        Text("複数通貨ペアの保有数量と含み損益から、口座全体のレバレッジと追加保有可能数量を計算します。")
         ExposedDropdownMenuBox(expanded = pairMenuOpen, onExpandedChange = { pairMenuOpen = it }) {
             OutlinedTextField(
                 value = state.selectedSymbol ?: "",
@@ -246,18 +261,41 @@ private fun LeverageCalculatorScreen(
             }
         }
         MoneyInput(state.deposit, { viewModel.setDeposit(it) }, "現在の入金額")
-        MoneyInput(state.unrealizedLoss, { viewModel.setUnrealizedLoss(it) }, "現在の含み損")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = state.side == PositionSide.BUY,
-                onClick = { viewModel.setSide(PositionSide.BUY) },
-                label = { Text("買いポジション") },
-            )
-            FilterChip(
-                selected = state.side == PositionSide.SELL,
-                onClick = { viewModel.setSide(PositionSide.SELL) },
-                label = { Text("売りポジション") },
-            )
+        if (state.unrealizedLoss.isNotBlank()) {
+            MoneyInput(state.unrealizedLoss, { viewModel.setUnrealizedLoss(it) }, "旧入力の含み損（口座全体）")
+        }
+        selectedRate?.let { rate ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("${rate.symbol} の保有状況", fontWeight = FontWeight.Bold)
+                    OutlinedTextField(
+                        value = selectedQuantity.takeIf { it > 0 }?.toString() ?: "",
+                        onValueChange = { viewModel.setPositionQuantity(rate.symbol, it) },
+                        modifier = Modifier.fillMaxWidth(), label = { Text("保有数量") }, suffix = { Text("通貨") },
+                        singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                    OutlinedTextField(
+                        value = state.unrealizedPnls[rate.symbol] ?: "",
+                        onValueChange = { viewModel.setUnrealizedPnl(rate.symbol, signedDecimalInput(it)) },
+                        modifier = Modifier.fillMaxWidth(), label = { Text("含み損益（損失はマイナス）") }, suffix = { Text("円") },
+                        singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = selectedSide == PositionSide.BUY, onClick = { viewModel.setPositionSide(rate.symbol, PositionSide.BUY) }, label = { Text("買い") })
+                        FilterChip(selected = selectedSide == PositionSide.SELL, onClick = { viewModel.setPositionSide(rate.symbol, PositionSide.SELL) }, label = { Text("売り") })
+                    }
+                }
+            }
+        }
+        if (positions.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("保有ポジション（${positions.size}通貨ペア）", fontWeight = FontWeight.Bold)
+                    positions.forEach { position ->
+                        Text("${position.symbol}: ${"%,d".format(position.quantity)}通貨 / 含み損益 ${"%,.0f".format(position.unrealizedPnl)}円")
+                    }
+                }
+            }
         }
         OutlinedTextField(
             value = state.targetLeverage,
@@ -272,19 +310,21 @@ private fun LeverageCalculatorScreen(
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("計算結果", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 if (calculation != null) {
-                    Text("推奨保有数量: ${"%,d".format(calculation.quantity)}通貨", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text("1万通貨単位: ${calculation.quantity / 10_000.0} Lot相当")
+                    Text("現在レバレッジ: ${calculation.currentLeverage.stripTrailingZeros().toPlainString()}倍", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     Text("有効資産: ${"%,.0f".format(calculation.effectiveEquity)}円")
-                    Text("計算後レバレッジ: ${calculation.actualLeverage.stripTrailingZeros().toPlainString()}倍")
+                    Text("現在の総保有額: ${"%,.0f".format(calculation.totalExposure)}円")
+                    Text("目標までの追加保有余力: ${"%,.0f".format(calculation.remainingExposure)}円")
+                    Text("${state.selectedSymbol} の追加可能数量: ${"%,d".format(calculation.additionalQuantity)}通貨", fontWeight = FontWeight.Bold)
+                    Text("追加後合計: ${"%,d".format(selectedQuantity + calculation.additionalQuantity)}通貨")
                     lossCut?.let { estimate ->
                         Text(
-                            "推定ロスカットレート: ${formatRate(estimate.triggerRate)}",
+                            "${state.selectedSymbol}のみが変動した場合の推定ロスカットレート: ${formatRate(estimate.triggerRate)}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.error,
                         )
                         Text(
-                            if (state.side == PositionSide.BUY) {
+                            if (selectedSide == PositionSide.BUY) {
                                 "現在値から約 ${formatRate(estimate.rateDistance)} 下落"
                             } else {
                                 "現在値から約 ${formatRate(estimate.rateDistance)} 上昇"
@@ -310,7 +350,7 @@ private fun LeverageCalculatorScreen(
                 }
             }
         }
-        Text("有効資産（入金額－含み損）×目標レバレッジ÷基準通貨の円換算レートで算出し、1通貨未満を切り捨てます。ロスカットは個人口座の維持証拠金率4%・維持率50%を前提とする概算です。複数ポジション、スプレッド、スワップ、出金依頼、基準レートの更新、相場急変による約定差は含みません。", style = MaterialTheme.typography.bodySmall)
+        Text("有効資産は入金額と全ポジションの含み損益から、総保有額は各基準通貨の円換算額から算出します。追加可能数量は目標レバレッジまでの余力を選択通貨の円換算レートで割り、1通貨未満を切り捨てます。ロスカットは個人口座の維持証拠金率4%・維持率50%を前提に、選択した通貨ペアだけが変動する場合の概算です。", style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -328,6 +368,7 @@ private fun MoneyInput(value: String, onChange: (String) -> Unit, label: String)
 }
 
 private fun decimalInput(value: String): String = value.filter { it.isDigit() || it == '.' }
+private fun signedDecimalInput(value: String): String = value.filterIndexed { index, char -> char.isDigit() || char == '.' || (char == '-' && index == 0) }
     .let { filtered -> if (filtered.count { it == '.' } <= 1) filtered else filtered.substringBeforeLast('.') }
     .take(16)
 

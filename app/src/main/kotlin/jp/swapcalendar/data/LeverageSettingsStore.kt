@@ -24,6 +24,7 @@ data class LeverageSettings(
     val unrealizedLoss: String = "",
     val targetLeverage: String = "",
     val side: PositionSide = PositionSide.BUY,
+    val unrealizedPnls: Map<String, String> = emptyMap(),
 )
 
 @Singleton

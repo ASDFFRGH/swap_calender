@@ -8,6 +8,39 @@ import java.math.BigDecimal
 
 class LeverageCalculationTest {
     @Test
+    fun `calculates portfolio leverage and additional quantity from multiple positions`() {
+        val result = calculatePortfolio(
+            deposit = BigDecimal("1000000"),
+            positions = listOf(
+                PositionValuation("USD/JPY", 10_000, BigDecimal("1500000"), BigDecimal("-50000")),
+                PositionValuation("EUR/JPY", 5_000, BigDecimal("800000"), BigDecimal("20000")),
+            ),
+            legacyUnrealizedLoss = BigDecimal.ZERO,
+            targetLeverage = BigDecimal("3"),
+            additionalBaseJpyRate = BigDecimal("150"),
+        )
+
+        assertEquals(BigDecimal("970000"), result?.effectiveEquity)
+        assertEquals(BigDecimal("2300000"), result?.totalExposure)
+        assertEquals(BigDecimal("2.371"), result?.currentLeverage)
+        assertEquals(4_066L, result?.additionalQuantity)
+    }
+
+    @Test
+    fun `additional quantity is zero when portfolio already exceeds target leverage`() {
+        val result = calculatePortfolio(
+            BigDecimal("100000"),
+            listOf(PositionValuation("USD/JPY", 10_000, BigDecimal("1500000"), BigDecimal.ZERO)),
+            BigDecimal.ZERO,
+            BigDecimal("10"),
+            BigDecimal("150"),
+        )
+
+        assertEquals(BigDecimal.ZERO, result?.remainingExposure)
+        assertEquals(0L, result?.additionalQuantity)
+    }
+
+    @Test
     fun `calculates quantity using effective equity and base yen rate`() {
         val result = calculateQuantity(
             deposit = BigDecimal("1000000"),

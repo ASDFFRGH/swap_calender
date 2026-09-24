@@ -8,6 +8,8 @@ import jp.swapcalendar.data.OfficialRateSource
 import jp.swapcalendar.data.PositionSide
 import jp.swapcalendar.data.LeverageSettings
 import jp.swapcalendar.data.LeverageSettingsStore
+import jp.swapcalendar.data.PairSettings
+import jp.swapcalendar.data.PairSettingsStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,7 +28,63 @@ data class LeverageUiState(
     val unrealizedLoss: String = "",
     val targetLeverage: String = "",
     val side: PositionSide = PositionSide.BUY,
+    val pairSettings: PairSettings = PairSettings(),
+    val unrealizedPnls: Map<String, String> = emptyMap(),
 )
+
+data class PositionValuation(
+    val symbol: String,
+    val quantity: Long,
+    val exposure: BigDecimal,
+    val unrealizedPnl: BigDecimal,
+)
+
+data class PortfolioCalculation(
+    val effectiveEquity: BigDecimal,
+    val totalExposure: BigDecimal,
+    val currentLeverage: BigDecimal,
+    val targetExposure: BigDecimal,
+    val remainingExposure: BigDecimal,
+    val additionalQuantity: Long,
+)
+
+internal fun calculatePortfolio(
+    deposit: BigDecimal,
+    positions: List<PositionValuation>,
+    legacyUnrealizedLoss: BigDecimal,
+    targetLeverage: BigDecimal,
+    additionalBaseJpyRate: BigDecimal,
+): PortfolioCalculation? {
+    val equity = deposit.add(positions.sumOf { it.unrealizedPnl }).subtract(legacyUnrealizedLoss)
+    if (equity <= BigDecimal.ZERO || targetLeverage <= BigDecimal.ZERO || additionalBaseJpyRate <= BigDecimal.ZERO) return null
+    val exposure = positions.sumOf { it.exposure }
+    val targetExposure = equity.multiply(targetLeverage)
+    val remaining = targetExposure.subtract(exposure).max(BigDecimal.ZERO)
+    return PortfolioCalculation(
+        effectiveEquity = equity,
+        totalExposure = exposure,
+        currentLeverage = exposure.divide(equity, 3, RoundingMode.HALF_UP),
+        targetExposure = targetExposure,
+        remainingExposure = remaining,
+        additionalQuantity = remaining.divide(additionalBaseJpyRate, 0, RoundingMode.FLOOR).longValueExact(),
+    )
+}
+
+internal fun estimatePortfolioLossCut(
+    calculation: PortfolioCalculation,
+    selectedQuantity: Long,
+    currentPairRate: BigDecimal,
+    quoteJpyRate: BigDecimal,
+    side: PositionSide,
+): LossCutEstimate? {
+    if (selectedQuantity <= 0 || currentPairRate <= BigDecimal.ZERO || quoteJpyRate <= BigDecimal.ZERO) return null
+    val maintenanceMargin = calculation.totalExposure.multiply(BigDecimal("0.04"))
+    val allowance = calculation.effectiveEquity.subtract(maintenanceMargin.multiply(BigDecimal("0.5")))
+    if (allowance <= BigDecimal.ZERO) return null
+    val distance = allowance.divide(BigDecimal.valueOf(selectedQuantity).multiply(quoteJpyRate), 8, RoundingMode.HALF_UP)
+    val trigger = if (side == PositionSide.BUY) currentPairRate.subtract(distance).max(BigDecimal.ZERO) else currentPairRate.add(distance)
+    return LossCutEstimate(trigger, distance, allowance, maintenanceMargin)
+}
 
 data class LeverageCalculation(
     val effectiveEquity: BigDecimal,
@@ -84,6 +142,7 @@ internal fun estimateLossCut(
 class LeverageViewModel @Inject constructor(
     private val rateSource: OfficialRateSource,
     private val settingsStore: LeverageSettingsStore,
+    private val pairSettingsStore: PairSettingsStore,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(LeverageUiState())
     val state: StateFlow<LeverageUiState> = mutableState.asStateFlow()
@@ -97,7 +156,13 @@ class LeverageViewModel @Inject constructor(
                     unrealizedLoss = settings.unrealizedLoss,
                     targetLeverage = settings.targetLeverage,
                     side = settings.side,
+                    unrealizedPnls = settings.unrealizedPnls,
                 )
+            }
+        }
+        viewModelScope.launch {
+            pairSettingsStore.settings.collect { settings ->
+                mutableState.value = mutableState.value.copy(pairSettings = settings)
             }
         }
         refresh()
@@ -112,6 +177,21 @@ class LeverageViewModel @Inject constructor(
     fun setUnrealizedLoss(value: String) { mutableState.value = mutableState.value.copy(unrealizedLoss = value); persist() }
     fun setTargetLeverage(value: String) { mutableState.value = mutableState.value.copy(targetLeverage = value); persist() }
     fun setSide(value: PositionSide) { mutableState.value = mutableState.value.copy(side = value); persist() }
+    fun setPositionQuantity(symbol: String, value: String) {
+        val quantity = value.filter(Char::isDigit).toLongOrNull() ?: 0L
+        viewModelScope.launch { pairSettingsStore.setQuantity(symbol, quantity) }
+    }
+    fun setPositionSide(symbol: String, value: PositionSide) {
+        viewModelScope.launch { pairSettingsStore.setSide(symbol, value) }
+    }
+    fun setUnrealizedPnl(symbol: String, value: String) {
+        mutableState.value = mutableState.value.copy(
+            unrealizedPnls = mutableState.value.unrealizedPnls.toMutableMap().apply {
+                if (value.isBlank()) remove(symbol) else put(symbol, value)
+            },
+        )
+        persist()
+    }
 
     private fun persist() {
         val current = mutableState.value
@@ -123,6 +203,7 @@ class LeverageViewModel @Inject constructor(
                     unrealizedLoss = current.unrealizedLoss,
                     targetLeverage = current.targetLeverage,
                     side = current.side,
+                    unrealizedPnls = current.unrealizedPnls,
                 ),
             )
         }
