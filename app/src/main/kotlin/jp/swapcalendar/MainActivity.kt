@@ -70,8 +70,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.net.toUri
 import dagger.hilt.android.AndroidEntryPoint
 import jp.swapcalendar.data.PositionSide
-import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -381,9 +381,9 @@ private fun MonthNavigation(state: CalendarUiState, previous: () -> Unit, next: 
 
 @Composable
 private fun CalendarGrid(state: CalendarUiState, selectDate: (LocalDate) -> Unit) {
-    val headings = listOf("月", "火", "水", "木", "金", "土", "日")
+    val headings = listOf("日", "月", "火", "水", "木", "金", "土")
     Row(Modifier.fillMaxWidth()) { headings.forEach { Text(it, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium) } }
-    val leading = state.month.atDay(1).dayOfWeek.value - DayOfWeek.MONDAY.value
+    val leading = sundayFirstLeadingDays(state.month)
     val cells = List(leading) { null } + (1..state.month.lengthOfMonth()).map(state.month::atDay)
     cells.chunked(7).forEach { week ->
         Row(Modifier.fillMaxWidth()) {
@@ -420,6 +420,8 @@ private fun CalendarGrid(state: CalendarUiState, selectDate: (LocalDate) -> Unit
         }
     }
 }
+
+internal fun sundayFirstLeadingDays(month: YearMonth): Int = month.atDay(1).dayOfWeek.value % 7
 
 private fun formatCalendarYen(amount: Long): String = when {
     amount > 0 -> "+${"%,d".format(amount)}円"

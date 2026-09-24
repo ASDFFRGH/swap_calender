@@ -19,6 +19,13 @@ class CalendarUiStateTest {
     )
 
     @Test
+    fun `calendar starts on Sunday`() {
+        assertEquals(0, sundayFirstLeadingDays(YearMonth.of(2026, 11)))
+        assertEquals(1, sundayFirstLeadingDays(YearMonth.of(2026, 6)))
+        assertEquals(6, sundayFirstLeadingDays(YearMonth.of(2026, 8)))
+    }
+
+    @Test
     fun `calculates buy receipt for actual quantity and truncates fractions`() {
         val state = state(PositionSide.BUY)
         assertEquals(1_801L, state.estimatedSwap(row))
