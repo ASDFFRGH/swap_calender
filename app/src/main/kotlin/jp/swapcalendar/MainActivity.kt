@@ -341,7 +341,6 @@ private fun formatRate(value: BigDecimal): String = value.setScale(5, RoundingMo
 
 @Composable
 private fun MonthlySwapTotal(state: CalendarUiState) {
-    val heldRows = state.visibleRows.filter { state.quantity(it.symbol) > 0 }
     Card(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().padding(14.dp),
@@ -352,7 +351,7 @@ private fun MonthlySwapTotal(state: CalendarUiState) {
             val total = state.estimatedMonthlySwap()
             Text(
                 when {
-                    heldRows.isEmpty() -> "保有数量未設定"
+                    state.heldRows.isEmpty() -> "保有数量未設定"
                     total == null -> "未発表"
                     else -> formatCalendarYen(total)
                 },
@@ -388,7 +387,8 @@ private fun CalendarGrid(state: CalendarUiState, selectDate: (LocalDate) -> Unit
     cells.chunked(7).forEach { week ->
         Row(Modifier.fillMaxWidth()) {
             (week + List(7 - week.size) { null }).forEach { date ->
-                val rows = state.visibleRows.filter { it.tradeDate == date?.toString() }
+                val visibleRows = state.visibleRows.filter { it.tradeDate == date?.toString() }
+                val heldRows = state.heldRows.filter { it.tradeDate == date?.toString() }
                 val selected = date == state.selectedDate
                 Box(
                     Modifier.weight(1f).height(58.dp).padding(2.dp)
@@ -401,15 +401,15 @@ private fun CalendarGrid(state: CalendarUiState, selectDate: (LocalDate) -> Unit
                 ) {
                     if (date != null) Column(Modifier.padding(5.dp)) {
                         Text(date.dayOfMonth.toString(), fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
-                        if (state.hasHoldings(rows)) {
-                            val amount = state.estimatedDailySwap(rows)
+                        if (heldRows.isNotEmpty()) {
+                            val amount = state.estimatedDailySwap(heldRows)
                             Text(
                                 amount?.let(::formatCalendarYen) ?: "未発表",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (amount != null && amount < 0) MaterialTheme.colorScheme.error else Color.Unspecified,
                             )
                         } else {
-                            val days = rows.map { it.spDays }.distinct()
+                            val days = visibleRows.map { it.spDays }.distinct()
                             if (days.isNotEmpty()) {
                                 Text("SP ${days.sorted().joinToString("・")}日", style = MaterialTheme.typography.labelSmall)
                             }
@@ -471,6 +471,13 @@ private fun PairSettingsDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Text("上下ボタンで表示優先度を変更できます。保有数量は通貨単位で入力してください。", style = MaterialTheme.typography.bodySmall)
+                if (state.heldSymbols.isNotEmpty()) {
+                    Text(
+                        "保有中（${state.heldSymbols.size}通貨ペア）: ${state.heldSymbols.joinToString { symbol -> "$symbol ${"%,d".format(state.quantity(symbol))}通貨" }}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
                 state.symbols.forEachIndexed { index, symbol ->
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

@@ -49,6 +49,8 @@ data class CalendarUiState(
             .sortedWith(compareBy<SwapPointRow> { it.tradeDate }.thenBy { order[it.symbol] ?: Int.MAX_VALUE })
             .toList()
     }
+    val heldRows: List<SwapPointRow> get() = rows.filter { quantity(it.symbol) > 0 }
+    val heldSymbols: List<String> get() = symbols.filter { quantity(it) > 0 }
     val selectedRows: List<SwapPointRow> get() = visibleRows.filter { it.tradeDate == selectedDate?.toString() }
 
     fun quantity(symbol: String): Long = pairSettings.quantities[symbol] ?: 0L
@@ -66,8 +68,6 @@ data class CalendarUiState(
             .longValueExact()
     }
 
-    fun hasHoldings(rows: List<SwapPointRow>): Boolean = rows.any { quantity(it.symbol) > 0 }
-
     fun estimatedDailySwap(rows: List<SwapPointRow>): Long? {
         val heldRows = rows.filter { quantity(it.symbol) > 0 }
         if (heldRows.isEmpty()) return null
@@ -77,7 +77,6 @@ data class CalendarUiState(
     }
 
     fun estimatedMonthlySwap(): Long? {
-        val heldRows = visibleRows.filter { quantity(it.symbol) > 0 }
         if (heldRows.isEmpty()) return null
         return heldRows.groupBy { it.tradeDate }
             .values

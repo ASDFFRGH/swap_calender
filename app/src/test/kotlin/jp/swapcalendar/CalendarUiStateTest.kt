@@ -97,7 +97,7 @@ class CalendarUiStateTest {
     }
 
     @Test
-    fun `sums held swap amounts for the visible month`() {
+    fun `sums all held swap amounts regardless of display filters`() {
         val secondDay = row.copy(tradeDate = "2026-09-02", buySwap = "100.5")
         val hidden = row.copy(pairId = "3", symbol = "EUR/JPY", buySwap = "500")
         val state = CalendarUiState(
@@ -109,7 +109,24 @@ class CalendarUiStateTest {
             ),
         )
 
-        assertEquals(2_002L, state.estimatedMonthlySwap())
+        assertEquals(2_502L, state.estimatedMonthlySwap())
+    }
+
+    @Test
+    fun `daily total includes all holdings when another pair is selected`() {
+        val eur = row.copy(pairId = "3", symbol = "EUR/JPY", buySwap = "100.5")
+        val state = CalendarUiState(
+            month = YearMonth.of(2026, 9),
+            rows = listOf(row, eur),
+            selectedPairs = setOf("USD/JPY"),
+            pairSettings = PairSettings(
+                quantities = mapOf("USD/JPY" to 20_000L, "EUR/JPY" to 10_000L),
+            ),
+        )
+
+        assertEquals(listOf("USD/JPY"), state.visibleRows.map { it.symbol })
+        assertEquals(listOf("USD/JPY", "EUR/JPY"), state.heldRows.map { it.symbol })
+        assertEquals(1_901L, state.estimatedDailySwap(state.heldRows))
     }
 
     @Test
