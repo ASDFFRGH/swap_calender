@@ -49,27 +49,30 @@ data class CalendarUiState(
             .sortedWith(compareBy<SwapPointRow> { it.tradeDate }.thenBy { order[it.symbol] ?: Int.MAX_VALUE })
             .toList()
     }
-    val heldRows: List<SwapPointRow> get() = rows.filter { quantity(it.symbol) > 0 }
+    val heldRows: List<SwapPointRow> get() = rows.filter { holdingsOn(it).isNotEmpty() }
     val heldSymbols: List<String> get() = symbols.filter { quantity(it) > 0 }
     val selectedRows: List<SwapPointRow> get() = visibleRows.filter { it.tradeDate == selectedDate?.toString() }
 
     fun quantity(symbol: String): Long = pairSettings.quantities[symbol] ?: 0L
     fun side(symbol: String): PositionSide = pairSettings.sides[symbol] ?: PositionSide.BUY
+    fun holdingsOn(row: SwapPointRow) = pairSettings.holdingsOn(row.symbol, LocalDate.parse(row.tradeDate))
     fun estimatedSwap(row: SwapPointRow): Long? {
-        val quantity = quantity(row.symbol)
-        if (quantity <= 0) return null
-        val value = when (side(row.symbol)) {
-            PositionSide.BUY -> row.buySwap
-            PositionSide.SELL -> row.sellSwap
-        }?.toBigDecimalOrNull() ?: return null
-        return value.multiply(BigDecimal.valueOf(quantity))
-            .divide(BigDecimal("10000"))
-            .setScale(0, RoundingMode.FLOOR)
-            .longValueExact()
+        val holdings = holdingsOn(row)
+        if (holdings.isEmpty()) return null
+        return holdings.sumOf { holding ->
+            val value = when (holding.side) {
+                PositionSide.BUY -> row.buySwap
+                PositionSide.SELL -> row.sellSwap
+            }?.toBigDecimalOrNull() ?: return null
+            value.multiply(BigDecimal.valueOf(holding.quantity))
+                .divide(BigDecimal("10000"))
+                .setScale(0, RoundingMode.FLOOR)
+                .longValueExact()
+        }
     }
 
     fun estimatedDailySwap(rows: List<SwapPointRow>): Long? {
-        val heldRows = rows.filter { quantity(it.symbol) > 0 }
+        val heldRows = rows.filter { holdingsOn(it).isNotEmpty() }
         if (heldRows.isEmpty()) return null
         val estimates = heldRows.map { estimatedSwap(it) }
         if (estimates.any { it == null }) return null
@@ -78,10 +81,10 @@ data class CalendarUiState(
 
     fun estimatedMonthlySwap(): Long? {
         if (heldRows.isEmpty()) return null
-        return heldRows.groupBy { it.tradeDate }
+        val publishedDays = heldRows.groupBy { it.tradeDate }
             .values
             .mapNotNull(::estimatedDailySwap)
-            .sum()
+        return publishedDays.takeIf(List<Long>::isNotEmpty)?.sum()
     }
 }
 
@@ -161,6 +164,15 @@ class CalendarViewModel @Inject constructor(
     }
     fun setSide(symbol: String, side: PositionSide) {
         viewModelScope.launch { settingsStore.setSide(symbol, side) }
+    }
+    fun setHeldOn(symbol: String, date: LocalDate) {
+        viewModelScope.launch { settingsStore.setHeldOn(symbol, date) }
+    }
+    fun release(symbol: String, date: LocalDate) {
+        viewModelScope.launch { settingsStore.release(symbol, date) }
+    }
+    fun removeClosedHolding(index: Int) {
+        viewModelScope.launch { settingsStore.removeClosedHolding(index) }
     }
 
     fun refresh() {

@@ -1,6 +1,7 @@
 package jp.swapcalendar
 
 import jp.swapcalendar.data.PairSettings
+import jp.swapcalendar.data.ClosedHolding
 import jp.swapcalendar.data.PositionSide
 import jp.swapcalendar.data.SwapPointRow
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -142,14 +143,50 @@ class CalendarUiStateTest {
     }
 
     @Test
-    fun `returns zero when all held days are unpublished`() {
+    fun `leaves monthly total empty when all held days are unpublished`() {
         val state = CalendarUiState(
             month = YearMonth.of(2026, 9),
             rows = listOf(row.copy(buySwap = null)),
             pairSettings = PairSettings(quantities = mapOf("USD/JPY" to 20_000L)),
         )
 
-        assertEquals(0L, state.estimatedMonthlySwap())
+        assertEquals(null, state.estimatedMonthlySwap())
+    }
+
+    @Test
+    fun `counts swaps only between holding and release dates inclusive`() {
+        val days = (1..5).map { day -> row.copy(tradeDate = "2026-09-0$day") }
+        val state = CalendarUiState(
+            month = YearMonth.of(2026, 9),
+            rows = days,
+            pairSettings = PairSettings(
+                closedHoldings = listOf(ClosedHolding("USD/JPY", 20_000L, PositionSide.BUY, "2026-09-02", "2026-09-04")),
+            ),
+        )
+
+        assertEquals(listOf("2026-09-02", "2026-09-03", "2026-09-04"), state.heldRows.map { it.tradeDate })
+        assertEquals(null, state.estimatedSwap(days[0]))
+        assertEquals(5_403L, state.estimatedMonthlySwap())
+        assertEquals(null, state.estimatedSwap(days[4]))
+    }
+
+    @Test
+    fun `preserves a released position when a new holding is opened`() {
+        val first = row.copy(tradeDate = "2026-09-02")
+        val later = row.copy(tradeDate = "2026-09-05", buySwap = "100")
+        val state = CalendarUiState(
+            month = YearMonth.of(2026, 9),
+            rows = listOf(first, later),
+            pairSettings = PairSettings(
+                quantities = mapOf("USD/JPY" to 10_000L),
+                heldOn = mapOf("USD/JPY" to "2026-09-05"),
+                closedHoldings = listOf(ClosedHolding("USD/JPY", 20_000L, PositionSide.BUY, "2026-09-01", "2026-09-03")),
+            ),
+        )
+
+        assertEquals(1_801L, state.estimatedSwap(first))
+        assertEquals(100L, state.estimatedSwap(later))
+        assertEquals(1_901L, state.estimatedMonthlySwap())
     }
 
     private fun state(side: PositionSide) = CalendarUiState(

@@ -49,6 +49,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,6 +73,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import jp.swapcalendar.data.PositionSide
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.math.BigDecimal
 import java.math.RoundingMode
@@ -125,6 +127,9 @@ fun SwapCalendarScreen(
             onMove = viewModel::movePair,
             onQuantityChange = viewModel::setQuantity,
             onSideChange = viewModel::setSide,
+            onHeldOnChange = viewModel::setHeldOn,
+            onRelease = viewModel::release,
+            onRemoveClosedHolding = viewModel::removeClosedHolding,
         )
     }
     ModalNavigationDrawer(
@@ -390,15 +395,18 @@ private fun MonthlySwapTotal(state: CalendarUiState) {
         ) {
             Text("月間スワップ合計", fontWeight = FontWeight.Bold)
             val total = state.estimatedMonthlySwap()
-            Text(
-                when {
-                    state.heldRows.isEmpty() -> "保有数量未設定"
-                    total == null -> "未発表"
-                    else -> formatCalendarYen(total)
-                },
-                fontWeight = FontWeight.Bold,
-                color = if (total != null && total < 0) MaterialTheme.colorScheme.error else Color.Unspecified,
-            )
+            val shown = when {
+                state.pairSettings.quantities.isEmpty() && state.pairSettings.closedHoldings.isEmpty() -> "保有数量未設定"
+                total == null -> null
+                else -> formatCalendarYen(total)
+            }
+            shown?.let {
+                Text(
+                    it,
+                    fontWeight = FontWeight.Bold,
+                    color = if (total != null && total < 0) MaterialTheme.colorScheme.error else Color.Unspecified,
+                )
+            }
         }
     }
 }
@@ -444,11 +452,13 @@ private fun CalendarGrid(state: CalendarUiState, selectDate: (LocalDate) -> Unit
                         Text(date.dayOfMonth.toString(), fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
                         if (heldRows.isNotEmpty()) {
                             val amount = state.estimatedDailySwap(heldRows)
-                            Text(
-                                amount?.let(::formatCalendarYen) ?: "未発表",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (amount != null && amount < 0) MaterialTheme.colorScheme.error else Color.Unspecified,
-                            )
+                            amount?.let {
+                                Text(
+                                    formatCalendarYen(it),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (it < 0) MaterialTheme.colorScheme.error else Color.Unspecified,
+                                )
+                            }
                         } else {
                             val days = visibleRows.map { it.spDays }.distinct()
                             if (days.isNotEmpty()) {
@@ -477,17 +487,16 @@ private fun DayDetails(state: CalendarUiState) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(row.symbol, fontWeight = FontWeight.Bold)
                 Text("SP日数: ${row.spDays}日")
-                ValueRow("買（1万通貨）", row.buySwap)
-                ValueRow("売（1万通貨）", row.sellSwap)
-                val quantity = state.quantity(row.symbol)
-                if (quantity > 0) {
-                    val side = if (state.side(row.symbol) == PositionSide.BUY) "買" else "売"
-                    Text("保有: ${"%,d".format(quantity)}通貨・$side")
+                row.buySwap?.let { ValueRow("買（1万通貨）", it) }
+                row.sellSwap?.let { ValueRow("売（1万通貨）", it) }
+                val holdings = state.holdingsOn(row)
+                if (holdings.isNotEmpty()) {
+                    holdings.forEach { holding ->
+                        val side = if (holding.side == PositionSide.BUY) "買" else "売"
+                        Text("保有: ${"%,d".format(holding.quantity)}通貨・$side")
+                    }
                     val estimate = state.estimatedSwap(row)
-                    Text(
-                        if (estimate == null) "実額: — 未発表" else "実額: ${"%,d".format(estimate)}円",
-                        fontWeight = FontWeight.Bold,
-                    )
+                    estimate?.let { Text("実額: ${"%,d".format(it)}円", fontWeight = FontWeight.Bold) }
                 }
             }
         }
@@ -502,6 +511,9 @@ private fun PairSettingsDialog(
     onMove: (String, Int) -> Unit,
     onQuantityChange: (String, String) -> Unit,
     onSideChange: (String, PositionSide) -> Unit,
+    onHeldOnChange: (String, LocalDate) -> Unit,
+    onRelease: (String, LocalDate) -> Unit,
+    onRemoveClosedHolding: (Int) -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -511,7 +523,7 @@ private fun PairSettingsDialog(
                 Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text("上下ボタンで表示優先度を変更できます。保有数量は通貨単位で入力してください。", style = MaterialTheme.typography.bodySmall)
+                Text("上下ボタンで表示優先度を変更できます。保有数量は通貨単位、日付は年-月-日の形式で入力してください。手放した日もスワップ集計に含みます。", style = MaterialTheme.typography.bodySmall)
                 if (state.heldSymbols.isNotEmpty()) {
                     Text(
                         "保有中（${state.heldSymbols.size}通貨ペア）: ${state.heldSymbols.joinToString { symbol -> "$symbol ${"%,d".format(state.quantity(symbol))}通貨" }}",
@@ -544,6 +556,37 @@ private fun PairSettingsDialog(
                                     label = { Text("売ポジション") },
                                 )
                             }
+                            if (state.quantity(symbol) > 0) {
+                                DateEditor(
+                                    symbol = symbol,
+                                    label = "保有日",
+                                    saved = state.pairSettings.heldOn[symbol],
+                                    max = LocalDate.now(ZoneId.of("Asia/Tokyo")),
+                                    onSave = { onHeldOnChange(symbol, it) },
+                                )
+                                DateEditor(
+                                    symbol = symbol,
+                                    label = "手放した日",
+                                    saved = null,
+                                    min = state.pairSettings.heldOn[symbol]?.let(LocalDate::parse),
+                                    max = LocalDate.now(ZoneId.of("Asia/Tokyo")),
+                                    enabled = state.pairSettings.heldOn[symbol] != null,
+                                    onSave = { onRelease(symbol, it) },
+                                )
+                            }
+                            state.pairSettings.closedHoldings.forEachIndexed { recordIndex, record ->
+                                if (record.symbol == symbol) {
+                                    val side = if (record.side == PositionSide.BUY) "買" else "売"
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            "${record.heldOn} ～ ${record.releasedOn}：${"%,d".format(record.quantity)}通貨・$side",
+                                            Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                        TextButton(onClick = { onRemoveClosedHolding(recordIndex) }) { Text("削除") }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -557,6 +600,7 @@ private fun PairSettingsDialog(
 @Composable
 private fun QuantityField(symbol: String, persisted: Long, onChange: (String, String) -> Unit) {
     var text by remember(symbol) { mutableStateOf(if (persisted > 0) persisted.toString() else "") }
+    LaunchedEffect(persisted) { if (persisted <= 0) text = "" }
     OutlinedTextField(
         value = text,
         onValueChange = { value ->
@@ -572,14 +616,35 @@ private fun QuantityField(symbol: String, persisted: Long, onChange: (String, St
 }
 
 @Composable
-private fun ValueRow(label: String, value: String?) {
-    val shown = value ?: "— 未発表"
-    val color = when {
-        value == null -> MaterialTheme.colorScheme.onSurfaceVariant
-        value.startsWith("-") -> MaterialTheme.colorScheme.error
-        else -> Color.Unspecified
+private fun DateEditor(
+    symbol: String,
+    label: String,
+    saved: String?,
+    min: LocalDate? = null,
+    max: LocalDate? = null,
+    enabled: Boolean = true,
+    onSave: (LocalDate) -> Unit,
+) {
+    var text by remember(symbol, label, saved) { mutableStateOf(saved.orEmpty()) }
+    val date = runCatching { LocalDate.parse(text) }.getOrNull()
+    val valid = date != null && (min == null || !date.isBefore(min)) && (max == null || !date.isAfter(max))
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it.filter { char -> char.isDigit() || char == '-' }.take(10) },
+            modifier = Modifier.weight(1f),
+            label = { Text("$label（YYYY-MM-DD）") },
+            singleLine = true,
+            enabled = enabled,
+            isError = text.length == 10 && !valid,
+        )
+        TextButton(onClick = { date?.let(onSave) }, enabled = enabled && valid && text != saved) { Text("保存") }
     }
-    Text("$label: $shown", color = color)
+}
+
+@Composable
+private fun ValueRow(label: String, value: String) {
+    Text("$label: $value", color = if (value.startsWith("-")) MaterialTheme.colorScheme.error else Color.Unspecified)
 }
 
 @Composable

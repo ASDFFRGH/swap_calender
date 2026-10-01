@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.IOException
+import java.time.LocalDate
+import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -21,14 +23,40 @@ private val settingsKey = stringPreferencesKey("settings_json")
 enum class PositionSide { BUY, SELL }
 
 @Serializable
+data class ClosedHolding(
+    val symbol: String,
+    val quantity: Long,
+    val side: PositionSide,
+    val heldOn: String,
+    val releasedOn: String,
+)
+
+data class Holding(val quantity: Long, val side: PositionSide)
+
+@Serializable
 data class PairSettings(
     val order: List<String> = emptyList(),
     val hidden: Set<String> = emptySet(),
     val quantities: Map<String, Long> = emptyMap(),
     val sides: Map<String, PositionSide> = emptyMap(),
+    val heldOn: Map<String, String> = emptyMap(),
+    val closedHoldings: List<ClosedHolding> = emptyList(),
 ) {
     fun orderedSymbols(available: List<String>): List<String> =
         order.filter(available::contains) + available.filterNot(order::contains)
+
+    fun holdingsOn(symbol: String, date: LocalDate): List<Holding> = buildList {
+        closedHoldings.filter { it.symbol == symbol &&
+            !date.isBefore(LocalDate.parse(it.heldOn)) &&
+            !date.isAfter(LocalDate.parse(it.releasedOn))
+        }.forEach { add(Holding(it.quantity, it.side)) }
+        val quantity = quantities[symbol] ?: 0L
+        val start = heldOn[symbol]?.let(LocalDate::parse)
+        if (quantity > 0 && (start == null || !date.isBefore(start))) {
+            add(Holding(quantity, sides[symbol] ?: PositionSide.BUY))
+        }
+    }
+
 }
 
 @Singleton
@@ -63,13 +91,45 @@ class PairSettingsStore @Inject constructor(@ApplicationContext private val cont
     }
 
     suspend fun setQuantity(symbol: String, quantity: Long) = update { current ->
-        current.copy(quantities = current.quantities.toMutableMap().apply {
-            if (quantity <= 0) remove(symbol) else put(symbol, quantity)
-        })
+        current.copy(
+            quantities = current.quantities.toMutableMap().apply {
+                if (quantity <= 0) remove(symbol) else put(symbol, quantity)
+            },
+            heldOn = current.heldOn.toMutableMap().apply {
+                if (quantity <= 0) remove(symbol)
+                else if (current.quantities[symbol] == null && this[symbol] == null) {
+                    put(symbol, LocalDate.now(ZoneId.of("Asia/Tokyo")).toString())
+                }
+            },
+        )
     }
 
     suspend fun setSide(symbol: String, side: PositionSide) = update { current ->
         current.copy(sides = current.sides + (symbol to side))
+    }
+
+    suspend fun setHeldOn(symbol: String, date: LocalDate) = update { current ->
+        if ((current.quantities[symbol] ?: 0L) <= 0) current
+        else current.copy(heldOn = current.heldOn + (symbol to date.toString()))
+    }
+
+    suspend fun release(symbol: String, date: LocalDate) = update { current ->
+        val quantity = current.quantities[symbol] ?: 0L
+        val start = current.heldOn[symbol]?.let(LocalDate::parse)
+        if (quantity <= 0 || start == null || date.isBefore(start) || date.isAfter(LocalDate.now(ZoneId.of("Asia/Tokyo")))) current
+        else current.copy(
+            quantities = current.quantities - symbol,
+            heldOn = current.heldOn - symbol,
+            closedHoldings = current.closedHoldings + ClosedHolding(
+                symbol, quantity, current.sides[symbol] ?: PositionSide.BUY,
+                start.toString(), date.toString(),
+            ),
+        )
+    }
+
+    suspend fun removeClosedHolding(index: Int) = update { current ->
+        if (index !in current.closedHoldings.indices) current
+        else current.copy(closedHoldings = current.closedHoldings.filterIndexed { i, _ -> i != index })
     }
 
     private suspend fun update(transform: (PairSettings) -> PairSettings) {
